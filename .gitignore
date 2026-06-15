@@ -1,0 +1,10 @@
+*.iml
+.gradle/
+build/
+.cxx/
+local.properties
+.idea/
+__pycache__/
+*.pyc
+.DS_Store
+*.bak
