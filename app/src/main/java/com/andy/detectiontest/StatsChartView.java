@@ -244,6 +244,12 @@ public class StatsChartView extends View {
                 vertBarPaint.setColor(vb.color);
                 c.drawRect(bx, by, bx + barW, barAreaB, vertBarPaint);
 
+                // 柱顶标注百分比
+                String pct = String.format("%.0f%%", vb.confidence * 100);
+                float pctX = bx + (barW - axisPaint.measureText(pct)) / 2f;
+                float pctY = by - 4 * dp;
+                c.drawText(pct, pctX, pctY, axisPaint);
+
                 String idx = String.valueOf(i + 1);
                 c.drawText(idx, bx + (barW - axisPaint.measureText(idx)) / 2f,
                         barAreaB + 14 * dp, axisPaint);
