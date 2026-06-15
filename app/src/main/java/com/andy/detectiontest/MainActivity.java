@@ -1,6 +1,10 @@
 package com.andy.detectiontest;
 
+import static android.app.Activity.RESULT_OK;
+
 import android.Manifest;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -15,11 +19,13 @@ import android.provider.MediaStore;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
@@ -32,6 +38,8 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.andy.detectiontest.detection.DetectionResult;
+import com.andy.detectiontest.detection.ModelConfig;
+import com.andy.detectiontest.detection.ModelManager;
 import com.andy.detectiontest.detection.NCNNDetector;
 import com.andy.detectiontest.detection.NCNNPostProcessor;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -47,15 +55,21 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "DetectionTest";
+
+    // request codes
     private static final int CAMERA_PERMISSION_REQUEST = 100;
-    private static final int PICK_IMAGE_REQUEST = 200;
+    private static final int PICK_IMAGE_REQUEST        = 200;
+    private static final int PICK_PARAM_FILE_REQUEST   = 300;
+    private static final int PICK_BIN_FILE_REQUEST     = 400;
 
     // Views
     private PreviewView previewView;
     private ImageView resultImage;
     private TextView resultText;
-    private TextView statsText;
+    private StatsChartView statsChart;
     private View statsPanel;
+    private Button modelSwitchBtn;
+    private Button importBtn;
     private Button captureBtn;
     private Button albumBtn;
     private Button backBtn;
@@ -64,8 +78,16 @@ public class MainActivity extends AppCompatActivity {
     private ImageCapture imageCapture;
     private boolean processing = false;
 
-    // NCNN 本地推理
+    // NCNN
     private NCNNDetector detector;
+    private ModelManager modelManager;
+
+    // 模型列表与当前索引
+    private List<ModelConfig> modelList;
+    private int currentModelIndex = -1;
+
+    // 导入流程暂存
+    private Uri pendingParamUri = null;
 
     // Threading
     private ExecutorService executor;
@@ -75,26 +97,214 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        previewView  = findViewById(R.id.previewView);
-        resultImage  = findViewById(R.id.resultImage);
-        resultText   = findViewById(R.id.resultText);
-        statsText    = findViewById(R.id.statsText);
-        statsPanel   = findViewById(R.id.statsPanel);
-        captureBtn   = findViewById(R.id.captureBtn);
-        albumBtn     = findViewById(R.id.albumBtn);
-        backBtn      = findViewById(R.id.backBtn);
+        previewView    = findViewById(R.id.previewView);
+        resultImage    = findViewById(R.id.resultImage);
+        resultText     = findViewById(R.id.resultText);
+        statsChart     = findViewById(R.id.statsChart);
+        statsPanel     = findViewById(R.id.statsPanel);
+        modelSwitchBtn = findViewById(R.id.modelSwitchBtn);
+        importBtn      = findViewById(R.id.importBtn);
+        captureBtn     = findViewById(R.id.captureBtn);
+        albumBtn       = findViewById(R.id.albumBtn);
+        backBtn        = findViewById(R.id.backBtn);
 
         executor = Executors.newSingleThreadExecutor();
-
-        // NCNN 本地推理
         detector = new NCNNDetector();
-        boolean ok = detector.load(getAssets());
-        Toast.makeText(this, ok ? "模型已加载" : "模型加载失败", Toast.LENGTH_SHORT).show();
 
+        // 初始化模型管理器
+        modelManager = new ModelManager(this);
+        modelManager.init();
+        modelList = modelManager.getAllModels();
+
+        if (modelList.isEmpty()) {
+            Toast.makeText(this, "没有可用模型！", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        // 加载第一个模型
+        currentModelIndex = 0;
+        loadModelByIndex(0);
+
+        modelSwitchBtn.setOnClickListener(v -> showModelSwitcher());
+        importBtn.setOnClickListener(v -> startImport());
         captureBtn.setOnClickListener(v -> takePhoto());
         albumBtn.setOnClickListener(v -> pickFromAlbum());
         backBtn.setOnClickListener(v -> showCamera());
     }
+
+    // ============================================================
+    // 🧠 模型切换
+    // ============================================================
+
+    private void refreshModelList() {
+        modelList = modelManager.getAllModels();
+    }
+
+    private void loadModelByIndex(int index) {
+        if (index < 0 || index >= modelList.size()) return;
+        ModelConfig target = modelList.get(index);
+
+        Toast.makeText(this, "加载中...", Toast.LENGTH_SHORT).show();
+
+        executor.execute(() -> {
+            boolean ok = modelManager.loadModel(detector, target);
+            runOnUiThread(() -> {
+                if (ok) {
+                    currentModelIndex = index;
+                    modelSwitchBtn.setText("切换");
+                } else {
+                    Toast.makeText(MainActivity.this,
+                            "模型加载失败: " + target.customName, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void showModelSwitcher() {
+        if (modelList == null || modelList.isEmpty()) {
+            Toast.makeText(this, "没有可用模型", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final int curIdx = currentModelIndex;
+        String[] items = new String[modelList.size()];
+        for (int i = 0; i < modelList.size(); i++) {
+            String marker = (i == curIdx) ? " ✓" : "";
+            items[i] = modelList.get(i).customName + marker;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("切换模型")
+                .setSingleChoiceItems(items, curIdx,
+                        (dialog, which) -> {
+                            dialog.dismiss();
+                            if (which == curIdx) return;
+                            loadModelByIndex(which);
+                        })
+                .setNeutralButton("删除导入模型", (dialog, which) -> {
+                    // 仅在当前模型是导入模型时可删除
+                    if (curIdx >= 0 && curIdx < modelList.size()) {
+                        ModelConfig cfg = modelList.get(curIdx);
+                        if (!"builtin".equals(cfg.sourceType)) {
+                            confirmDeleteModel(cfg);
+                        } else {
+                            Toast.makeText(this, "内置模型不能删除", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmDeleteModel(ModelConfig cfg) {
+        new AlertDialog.Builder(this)
+                .setTitle("确认删除")
+                .setMessage("删除模型「" + cfg.customName + "」？")
+                .setPositiveButton("删除", (dialog, which) -> {
+                    modelManager.deleteModel(cfg);
+                    refreshModelList();
+
+                    if (modelList.isEmpty()) {
+                        Toast.makeText(this, "已无可用模型", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    // 切换到第一个可用模型
+                    currentModelIndex = 0;
+                    loadModelByIndex(0);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // ============================================================
+    // 📥 导入模型
+    // ============================================================
+
+    private void startImport() {
+        Toast.makeText(this, "请选择 .param 模型结构文件", Toast.LENGTH_LONG).show();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_PARAM_FILE_REQUEST);
+    }
+
+    private void onParamFileSelected(Uri uri) {
+        pendingParamUri = uri;
+        Toast.makeText(this, "请选择 .bin 模型权重文件", Toast.LENGTH_LONG).show();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_BIN_FILE_REQUEST);
+    }
+
+    private void onBinFileSelected(Uri binUri) {
+        if (pendingParamUri == null) {
+            Toast.makeText(this, "请先选择 .param 文件", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        // 弹命名对话框
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("命名模型");
+
+        final EditText input = new EditText(this);
+        input.setHint("输入模型名称");
+        input.setText("自定义模型 " + System.currentTimeMillis() % 10000);
+        builder.setView(input);
+
+        builder.setPositiveButton("导入", (dialog, which) -> {
+            String name = input.getText().toString().trim();
+            if (name.isEmpty()) {
+                Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            doImport(pendingParamUri, binUri, name);
+        });
+        builder.setNegativeButton("取消", (dialog, which) -> {
+            pendingParamUri = null;
+        });
+        builder.show();
+    }
+
+    private void doImport(Uri paramUri, Uri binUri, String customName) {
+        Toast.makeText(this, "正在导入...", Toast.LENGTH_SHORT).show();
+
+        executor.execute(() -> {
+            // 授予持久 URI 读取权限（SAF）
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        paramUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {}
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        binUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {}
+
+            ModelConfig cfg = modelManager.importModel(paramUri, binUri, customName);
+
+            runOnUiThread(() -> {
+                pendingParamUri = null;
+
+                if (cfg == null) {
+                    Toast.makeText(MainActivity.this, "导入失败", Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                // 刷新列表并切换到新模型
+                refreshModelList();
+                currentModelIndex = modelList.indexOf(cfg);
+                loadModelByIndex(currentModelIndex);
+
+                Toast.makeText(MainActivity.this,
+                        "导入成功: " + cfg.customName, Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    // ============================================================
+    // Camera / Album / ActivityResult
+    // ============================================================
 
     @Override
     protected void onResume() {
@@ -108,10 +318,6 @@ public class MainActivity extends AppCompatActivity {
                     CAMERA_PERMISSION_REQUEST);
         }
     }
-
-    // ============================================================
-    // 相机
-    // ============================================================
 
     private void startCamera() {
         ListenableFuture<ProcessCameraProvider> future =
@@ -142,10 +348,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }, ContextCompat.getMainExecutor(this));
     }
-
-    // ============================================================
-    // 拍照 / 相册
-    // ============================================================
 
     private void takePhoto() {
         if (processing) return;
@@ -188,29 +390,47 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_IMAGE_REQUEST && resultCode == RESULT_OK && data != null) {
-            Uri imageUri = data.getData();
-            if (imageUri != null) {
-                processing = true;
-                showLoading();
-                showResultArea();
-                executor.execute(() -> {
-                    try {
-                        Bitmap bitmap = loadBitmapFromUri(imageUri);
-                        if (bitmap == null) {
-                            throw new RuntimeException("Bitmap decode returned null");
-                        }
-                        runDetection(bitmap);
-                    } catch (Exception e) {
-                        processing = false;
-                        Log.e(TAG, "Load image failed", e);
-                        runOnUiThread(() -> resultText.setText("图片加载失败"));
-                    }
-                });
+
+        if (resultCode != RESULT_OK || data == null) {
+            if (requestCode == PICK_PARAM_FILE_REQUEST || requestCode == PICK_BIN_FILE_REQUEST) {
+                pendingParamUri = null;
             }
+            return;
         }
+
+        Uri uri = data.getData();
+        if (uri == null) return;
+
+        switch (requestCode) {
+            case PICK_IMAGE_REQUEST:
+                handleAlbumImage(uri);
+                break;
+            case PICK_PARAM_FILE_REQUEST:
+                onParamFileSelected(uri);
+                break;
+            case PICK_BIN_FILE_REQUEST:
+                onBinFileSelected(uri);
+                break;
+        }
+    }
+
+    private void handleAlbumImage(Uri imageUri) {
+        processing = true;
+        showLoading();
+        showResultArea();
+        executor.execute(() -> {
+            try {
+                Bitmap bitmap = loadBitmapFromUri(imageUri);
+                if (bitmap == null) throw new RuntimeException("Bitmap decode returned null");
+                runDetection(bitmap);
+            } catch (Exception e) {
+                processing = false;
+                Log.e(TAG, "Load image failed", e);
+                runOnUiThread(() -> resultText.setText("图片加载失败"));
+            }
+        });
     }
 
     // ============================================================
@@ -218,7 +438,12 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
 
     private void runDetection(Bitmap bitmap) {
-        runOnUiThread(() -> resultText.setText("检测中..."));
+        if (detector == null || !detector.isLoaded()) {
+            processing = false;
+            runOnUiThread(() -> resultText.setText("模型未加载"));
+            return;
+        }
+        runOnUiThread(() -> resultText.setText("检测中 ..."));
 
         executor.execute(() -> {
             try {
@@ -247,41 +472,60 @@ public class MainActivity extends AppCompatActivity {
         Bitmap annotated = drawResults(original, results);
         resultImage.setImageBitmap(annotated);
 
-        Map<String, Integer> counts = new HashMap<>();
-        Map<String, Float> maxConf = new HashMap<>();
+        // 统计各类别
+        java.util.List<StatsChartView.BarData> barList = new java.util.ArrayList<>();
+        Map<String, int[]> classStats = new HashMap<>();
+        Map<String, Integer> classIdMap = new HashMap<>();
+        int maxCount = 0;
         for (DetectionResult r : results) {
-            counts.put(r.className, counts.getOrDefault(r.className, 0) + 1);
-            float cur = maxConf.getOrDefault(r.className, 0f);
-            if (r.confidence > cur) maxConf.put(r.className, r.confidence);
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("📊 检测统计\n");
-        sb.append("─────────────────\n");
-        if (results.isEmpty()) {
-            sb.append("⚠️ 未检测到目标\n");
-        } else {
-            for (Map.Entry<String, Integer> e : counts.entrySet()) {
-                String cls = e.getKey();
-                int cnt = e.getValue();
-                float conf = maxConf.getOrDefault(cls, 0f);
-                sb.append(String.format("• %s: %d  (最高 %.0f%%)\n",
-                        classNameDisplay(cls), cnt, conf * 100));
+            int[] stats = classStats.get(r.className);
+            if (stats == null) {
+                stats = new int[]{0, 0};
+                classStats.put(r.className, stats);
+                classIdMap.put(r.className, r.classId);
             }
+            stats[0]++;
+            int confInt = (int)(r.confidence * 100);
+            if (confInt > stats[1]) stats[1] = confInt;
         }
-        sb.append("─────────────────\n");
-        sb.append(String.format("⏱ 总耗时: %.0f ms\n", totalMs));
-        sb.append(String.format("📏 图片: %d×%d", original.getWidth(), original.getHeight()));
+        for (int[] s : classStats.values()) {
+            if (s[0] > maxCount) maxCount = s[0];
+        }
 
-        statsText.setText(sb.toString());
+        for (Map.Entry<String, int[]> e : classStats.entrySet()) {
+            StatsChartView.BarData b = new StatsChartView.BarData();
+            b.label    = classNameDisplay(e.getKey());
+            b.count    = e.getValue()[0];
+            b.confPct  = e.getValue()[1];
+            Integer cid = classIdMap.get(e.getKey());
+            b.color    = NCNNPostProcessor.getClassColor(cid != null ? cid : 0);
+            b.maxCount = maxCount;
+            barList.add(b);
+        }
+
+        ModelConfig cfg = detector.getModelConfig();
+        String modelName = (cfg != null) ? cfg.customName : "?";
+        String inputSizeStr = (cfg != null) ? cfg.inputSize + "x" + cfg.inputSize : "?";
+        String confStr = (cfg != null) ? String.format("%.2f", cfg.confThresh) : "?";
+        String iouStr  = (cfg != null) ? String.format("%.2f", cfg.iouThresh) : "?";
+
+        statsChart.setData(
+                barList,
+                modelName,
+                inputSizeStr,
+                "conf " + confStr + " / iou " + iouStr,
+                String.format("%.0f ms", totalMs),
+                original.getWidth() + " x " + original.getHeight(),
+                String.valueOf(results.size()));
+
         statsPanel.setVisibility(View.VISIBLE);
-        resultText.setText(String.format("检测 %d 个目标", results.size()));
+        resultText.setText(String.format("共 %d 个检测框", results.size()));
     }
 
     private void showLoading() {
         statsPanel.setVisibility(View.GONE);
         resultText.setVisibility(View.VISIBLE);
-        resultText.setText("检测中...");
+        resultText.setText("检测中 ...");
     }
 
     private void showResultArea() {
@@ -377,8 +621,8 @@ public class MainActivity extends AppCompatActivity {
     private String classNameDisplay(String name) {
         if (name == null) return "未知";
         switch (name.toLowerCase()) {
-            case "face_sheet": return "📄 面单";
-            case "tape":       return "📎 胶带";
+            case "face_sheet": return "面单";
+            case "tape":       return "胶带";
             default:           return name;
         }
     }

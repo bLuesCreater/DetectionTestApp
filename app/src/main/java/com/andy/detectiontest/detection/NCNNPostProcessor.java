@@ -5,38 +5,68 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Post-processor for NCNN YOLO11n (640×640 input, 2-class output).
+ * Post-processor for NCNN YOLO (640×640 input, multi-class).
  *
- * NCNN output: flat float[50400] = 6 × 8400 (feature-major)
- * Per detection: [cx, cy, w, h, conf_face_sheet, conf_tape]
- *   cx,cy,w,h are pixel-level coords in 640×640 space (already stride-scaled)
+ * NCNN output: flat float[] = stride × numDetections (feature-major)
+ * Per detection: [cx, cy, w, h, conf_cls0, conf_cls1, ...]
+ *   cx,cy,w,h are pixel-level coords in padded space
  *   conf values are sigmoid'd (0~1)
  */
 public class NCNNPostProcessor {
 
     public static final int INPUT_SIZE = 640;
-    public static final int NUM_DETECTIONS = 8400;
-    private static final int STRIDE = 6;  // cx,cy,w,h,cls0,cls1
-    private static final int NUM_CLASSES = 2;
+    private static final int DEFAULT_NUM_DETECTIONS = 8400;
+    private static final int DEFAULT_STRIDE = 6;
+    private static final int DEFAULT_NUM_CLASSES = 2;
 
-    private static final float CONF_THRESH = 0.50f;
-    private static final float IOU_THRESH = 0.45f;
+    private static final float DEFAULT_CONF_THRESH = 0.50f;
+    private static final float DEFAULT_IOU_THRESH  = 0.45f;
 
-    public static final String[] CLASS_NAMES = { "face_sheet", "tape" };
-    private static final int[] CLASS_COLORS = { 0xFFFF3232, 0xFF32C832 };
+    public static final String[] DEFAULT_CLASS_NAMES = { "face_sheet", "tape" };
+    private static final int[] DEFAULT_CLASS_COLORS = { 0xFFFF3232, 0xFF32C832 };
+
+    // ============================================================
+    // 旧接口（向后兼容）
+    // ============================================================
 
     public static List<DetectionResult> process(
             float[] rawOutput, int origW, int origH,
             NCNNPreProcessor.LetterboxInfo letterbox) {
-        return process(rawOutput, origW, origH, letterbox, CONF_THRESH, IOU_THRESH);
+        ModelConfig cfg = ModelConfig.builtin("yolov8n", "快递检测 v1");
+        cfg.confThresh = DEFAULT_CONF_THRESH;
+        cfg.iouThresh  = DEFAULT_IOU_THRESH;
+        return process(rawOutput, origW, origH, letterbox, cfg);
     }
 
     public static List<DetectionResult> process(
             float[] rawOutput, int origW, int origH,
             NCNNPreProcessor.LetterboxInfo letterbox,
             float confThresh, float iouThresh) {
+        ModelConfig cfg = ModelConfig.builtin("yolov8n", "快递检测 v1");
+        cfg.confThresh = confThresh;
+        cfg.iouThresh  = iouThresh;
+        return process(rawOutput, origW, origH, letterbox, cfg);
+    }
 
-        if (rawOutput == null || rawOutput.length < NUM_DETECTIONS * STRIDE) {
+    // ============================================================
+    // 新接口：从 ModelConfig 读取参数
+    // ============================================================
+
+    public static List<DetectionResult> process(
+            float[] rawOutput, int origW, int origH,
+            NCNNPreProcessor.LetterboxInfo letterbox,
+            ModelConfig config) {
+
+        int numDetections = config.numDetections;
+        int stride        = config.stride;
+        int numClasses    = config.numClasses;
+        String[] classNames = (config.classNames != null && config.classNames.length >= numClasses)
+                ? config.classNames : DEFAULT_CLASS_NAMES;
+
+        float confThresh = config.confThresh;
+        float iouThresh  = config.iouThresh;
+
+        if (rawOutput == null || rawOutput.length < numDetections * stride) {
             return new ArrayList<>();
         }
 
@@ -46,30 +76,33 @@ public class NCNNPostProcessor {
 
         List<DetectionResult> candidates = new ArrayList<>();
 
-        for (int det = 0; det < NUM_DETECTIONS; det++) {
-            // Feature-major read: output[ch * NUM_DETECTIONS + det]
-            float cx = rawOutput[0 * NUM_DETECTIONS + det];
-            float cy = rawOutput[1 * NUM_DETECTIONS + det];
-            float w  = rawOutput[2 * NUM_DETECTIONS + det];
-            float h  = rawOutput[3 * NUM_DETECTIONS + det];
+        for (int det = 0; det < numDetections; det++) {
+            // Feature-major read: output[ch * numDetections + det]
+            float cx = rawOutput[0 * numDetections + det];
+            float cy = rawOutput[1 * numDetections + det];
+            float w  = rawOutput[2 * numDetections + det];
+            float h  = rawOutput[3 * numDetections + det];
 
-            // Class scores (already sigmoid'd by NCNN param)
-            float conf0 = rawOutput[4 * NUM_DETECTIONS + det];
-            float conf1 = rawOutput[5 * NUM_DETECTIONS + det];
+            // 找最佳类别
+            float maxConf = 0f;
+            int maxCls = -1;
+            for (int c = 0; c < numClasses; c++) {
+                float conf = rawOutput[(4 + c) * numDetections + det];
+                if (conf > maxConf) {
+                    maxConf = conf;
+                    maxCls = c;
+                }
+            }
 
-            float maxConf = conf0;
-            int maxCls = 0;
-            if (conf1 > maxConf) { maxConf = conf1; maxCls = 1; }
+            if (maxCls < 0 || maxConf < confThresh) continue;
 
-            if (maxConf < confThresh) continue;
-
-            // cx,cy,w,h are pixel coords in 640×640 padded space
+            // cx,cy,w,h are pixel coords in INPUT_SIZE padded space
             float x1 = cx - w / 2f;
             float y1 = cy - h / 2f;
             float x2 = cx + w / 2f;
             float y2 = cy + h / 2f;
 
-            // Letterbox inverse: remove padding, scale back to original image
+            // Letterbox inverse
             x1 = (x1 - dw) / scale;
             y1 = (y1 - dh) / scale;
             x2 = (x2 - dw) / scale;
@@ -86,7 +119,7 @@ public class NCNNPostProcessor {
             // Normalize to [0,1] for overlay drawing
             DetectionResult result = new DetectionResult();
             result.classId = maxCls;
-            result.className = CLASS_NAMES[maxCls];
+            result.className = (maxCls < classNames.length) ? classNames[maxCls] : "cls_" + maxCls;
             result.confidence = maxConf;
             result.x = x1 / origW;
             result.y = y1 / origH;
@@ -98,17 +131,21 @@ public class NCNNPostProcessor {
 
         if (candidates.isEmpty()) return candidates;
 
-        return perClassNMS(candidates, iouThresh);
+        return perClassNMS(candidates, numClasses, iouThresh);
     }
 
-    private static List<DetectionResult> perClassNMS(
-            List<DetectionResult> detections, float iouThresh) {
+    // ============================================================
+    // NMS
+    // ============================================================
 
-        List<List<DetectionResult>> groups = new ArrayList<>(NUM_CLASSES);
-        for (int i = 0; i < NUM_CLASSES; i++) groups.add(new ArrayList<>());
+    private static List<DetectionResult> perClassNMS(
+            List<DetectionResult> detections, int numClasses, float iouThresh) {
+
+        List<List<DetectionResult>> groups = new ArrayList<>(numClasses);
+        for (int i = 0; i < numClasses; i++) groups.add(new ArrayList<>());
 
         for (DetectionResult d : detections) {
-            if (d.classId >= 0 && d.classId < NUM_CLASSES) {
+            if (d.classId >= 0 && d.classId < numClasses) {
                 groups.get(d.classId).add(d);
             }
         }
@@ -157,8 +194,12 @@ public class NCNNPostProcessor {
         return union > 0 ? inter / union : 0;
     }
 
+    // ============================================================
+    // 颜色
+    // ============================================================
+
     public static int getClassColor(int classId) {
-        if (classId >= 0 && classId < CLASS_COLORS.length) return CLASS_COLORS[classId];
+        if (classId >= 0 && classId < DEFAULT_CLASS_COLORS.length) return DEFAULT_CLASS_COLORS[classId];
         return 0xFFC8C800;
     }
 }

@@ -57,15 +57,11 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <TextView
-            android:id="@+id/statsText"
+        <com.andy.detectiontest.StatsChartView
+            android:id="@+id/statsChart"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="12dp"
-            android:lineSpacingExtra="4dp"
-            android:textColor="@android:color/black"
-            android:textSize="14sp"
-            android:typeface="monospace" />
+            android:padding="12dp" />
 
     </androidx.cardview.widget.CardView>
 
@@ -82,31 +78,54 @@
         app:layout_constraintEnd_toEndOf="parent">
 
         <Button
+            android:id="@+id/modelSwitchBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="2dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="切换"
+            android:textSize="14sp"
+            android:textAllCaps="false"/>
+
+        <Button
+            android:id="@+id/importBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="4dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:text="导入"
+            android:textSize="14sp"
+            android:textAllCaps="false"/>
+
+        <Button
             android:id="@+id/captureBtn"
             android:layout_width="0dp"
             android:layout_height="44dp"
-            android:layout_margin="8dp"
+            android:layout_margin="4dp"
             android:layout_weight="1"
-            android:text="📷 拍照识别"
-            android:textSize="15sp"
-            android:drawablePadding="4dp"/>
+            android:text="拍照"
+            android:textSize="16sp"/>
 
         <Button
             android:id="@+id/albumBtn"
             android:layout_width="wrap_content"
             android:layout_height="44dp"
-            android:layout_margin="8dp"
-            android:text="🖼 相册"
+            android:layout_margin="4dp"
+            android:text="相册"
             android:textSize="15sp"/>
 
         <Button
             android:id="@+id/backBtn"
             android:layout_width="0dp"
             android:layout_height="44dp"
-            android:layout_margin="8dp"
+            android:layout_margin="4dp"
             android:layout_weight="1"
-            android:text="↩ 返回"
-            android:textSize="15sp"
+            android:text="返回"
+            android:textSize="16sp"
             android:visibility="gone"/>
 
     </LinearLayout>
