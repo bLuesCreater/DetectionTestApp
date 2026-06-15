@@ -4,7 +4,7 @@ import static android.app.Activity.RESULT_OK;
 
 import android.Manifest;
 import android.app.AlertDialog;
-import android.content.DialogInterface;
+import java.io.File;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -59,8 +59,7 @@ public class MainActivity extends AppCompatActivity {
     // request codes
     private static final int CAMERA_PERMISSION_REQUEST = 100;
     private static final int PICK_IMAGE_REQUEST        = 200;
-    private static final int PICK_PARAM_FILE_REQUEST   = 300;
-    private static final int PICK_BIN_FILE_REQUEST     = 400;
+    private static final int PICK_MODEL_FILE_REQUEST   = 300;
 
     // Views
     private PreviewView previewView;
@@ -222,83 +221,186 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
 
     private void startImport() {
-        Toast.makeText(this, "步骤1/2: 选择 NCNN 结构文件 (.param)", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "选择模型文件 (.param 或 .zip/.ncnn)", Toast.LENGTH_LONG).show();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-        startActivityForResult(intent, PICK_PARAM_FILE_REQUEST);
+        startActivityForResult(intent, PICK_MODEL_FILE_REQUEST);
     }
 
-    private void onParamFileSelected(Uri uri) {
-        pendingParamUri = uri;
-        Toast.makeText(this, "步骤2/2: 选择 NCNN 权重文件 (.bin)", Toast.LENGTH_LONG).show();
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        startActivityForResult(intent, PICK_BIN_FILE_REQUEST);
+    /** 从 URI 获取文件名 */
+    private String getFileName(Uri uri) {
+        String name = "unknown";
+        try (android.database.Cursor c = getContentResolver().query(
+                uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(
+                        android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) name = c.getString(idx);
+            }
+        } catch (Exception ignored) {}
+        if (name == null || name.isEmpty()) name = "model";
+        return name;
     }
 
-    private void onBinFileSelected(Uri binUri) {
-        if (pendingParamUri == null) {
-            Toast.makeText(this, "请先选择 .param 文件", Toast.LENGTH_LONG).show();
-            return;
+    private void onModelFileSelected(Uri uri) {
+        String fileName = getFileName(uri).toLowerCase();
+
+        if (fileName.endsWith(".param")) {
+            // .param → 老流程，再选 .bin
+            pendingParamUri = uri;
+            Toast.makeText(this, "再选择 .bin 权重文件", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            startActivityForResult(intent, PICK_MODEL_FILE_REQUEST);
+
+        } else if (fileName.endsWith(".zip") || fileName.endsWith(".ncnn")) {
+            // .zip / .ncnn → 解压后自动识别
+            showNameDialogAndImportZip(uri);
+
+        } else {
+            Toast.makeText(this, "请选择 .param, .zip 或 .ncnn 文件",
+                    Toast.LENGTH_LONG).show();
         }
+    }
 
-        // 弹命名对话框
+    /** 已选 .param，回调再次收到文件时当做 .bin */
+    private void onSecondFileSelected(Uri uri) {
+        if (pendingParamUri == null) return;
+        showNameDialogThenImport(pendingParamUri, uri);
+    }
+
+    // ════════════════════════════════════════════
+    // 命名弹窗 + 导入
+    // ════════════════════════════════════════════
+
+    private void showNameDialogThenImport(Uri paramUri, Uri binUri) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("命名模型");
-
         final EditText input = new EditText(this);
         input.setHint("输入模型名称");
         input.setText("自定义模型 " + System.currentTimeMillis() % 10000);
         builder.setView(input);
-
         builder.setPositiveButton("导入", (dialog, which) -> {
             String name = input.getText().toString().trim();
-            if (name.isEmpty()) {
-                Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            doImport(pendingParamUri, binUri, name);
+            if (name.isEmpty()) { Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show(); return; }
+            doImportFromUris(paramUri, binUri, name);
         });
-        builder.setNegativeButton("取消", (dialog, which) -> {
-            pendingParamUri = null;
-        });
+        builder.setNegativeButton("取消", (dialog, which) -> pendingParamUri = null);
         builder.show();
     }
 
-    private void doImport(Uri paramUri, Uri binUri, String customName) {
+    private void showNameDialogAndImportZip(Uri zipUri) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("命名模型");
+        final EditText input = new EditText(this);
+        String hint = getFileName(zipUri);
+        if (hint.endsWith(".ncnn") || hint.endsWith(".zip"))
+            hint = hint.substring(0, hint.lastIndexOf('.'));
+        input.setHint("输入模型名称");
+        input.setText(hint);
+        builder.setView(input);
+        builder.setPositiveButton("导入", (dialog, which) -> {
+            String name = input.getText().toString().trim();
+            if (name.isEmpty()) { Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show(); return; }
+            doImportFromZip(zipUri, name);
+        });
+        builder.setNegativeButton("取消", null);
+        builder.show();
+    }
+
+    // ════════════════════════════════════════════
+    // 执行导入
+    // ════════════════════════════════════════════
+
+    /** 从两个 URI 导入（.param + .bin） */
+    private void doImportFromUris(Uri paramUri, Uri binUri, String customName) {
         Toast.makeText(this, "正在导入...", Toast.LENGTH_SHORT).show();
-
         executor.execute(() -> {
-            // 授予持久 URI 读取权限（SAF）
-            try {
-                getContentResolver().takePersistableUriPermission(
-                        paramUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Exception ignored) {}
-            try {
-                getContentResolver().takePersistableUriPermission(
-                        binUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Exception ignored) {}
-
+            takePerm(paramUri); takePerm(binUri);
             ModelConfig cfg = modelManager.importModel(paramUri, binUri, customName);
+            postImport(cfg);
+        });
+    }
 
-            runOnUiThread(() -> {
-                pendingParamUri = null;
+    /** 从 zip/.ncnn 解压后导入 */
+    private void doImportFromZip(Uri zipUri, String customName) {
+        Toast.makeText(this, "正在解压导入...", Toast.LENGTH_SHORT).show();
+        executor.execute(() -> {
+            takePerm(zipUri);
+            try {
+                // 读 zip 到临时目录
+                java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                        getContentResolver().openInputStream(zipUri));
+                File tmpDir = new File(getCacheDir(), "unzip_" + System.nanoTime());
+                tmpDir.mkdirs();
 
-                if (cfg == null) {
-                    Toast.makeText(MainActivity.this, "导入失败", Toast.LENGTH_LONG).show();
-                    return;
+                java.util.zip.ZipEntry entry;
+                File paramFile = null;
+                File binFile   = null;
+
+                while ((entry = zis.getNextEntry()) != null) {
+                    File out = new File(tmpDir, entry.getName());
+                    if (entry.isDirectory()) { out.mkdirs(); continue; }
+                    out.getParentFile().mkdirs();
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = zis.read(buf)) != -1) fos.write(buf, 0, n);
+                    fos.close();
+
+                    String ename = entry.getName().toLowerCase();
+                    if (ename.endsWith(".param")) paramFile = out;
+                    else if (ename.endsWith(".bin")) binFile = out;
+                }
+                zis.close();
+
+                if (paramFile == null || binFile == null) {
+                    throw new RuntimeException("ZIP 中未找到 .param 和 .bin 文件");
                 }
 
-                // 刷新列表并切换到新模型
-                refreshModelList();
-                currentModelIndex = modelList.indexOf(cfg);
-                loadModelByIndex(currentModelIndex);
+                // 复制到 models 目录并注册
+                ModelConfig cfg = modelManager.importModel(
+                        Uri.fromFile(paramFile),
+                        Uri.fromFile(binFile),
+                        customName);
 
-                Toast.makeText(MainActivity.this,
-                        "导入成功: " + cfg.customName, Toast.LENGTH_LONG).show();
-            });
+                // 清理临时目录
+                for (File f : tmpDir.listFiles()) deleteRecursive(f);
+                tmpDir.delete();
+
+                postImport(cfg);
+
+            } catch (Exception e) {
+                Log.e(TAG, "Zip import failed", e);
+                runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                        "导入失败: " + e.getLocalizedMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    private void deleteRecursive(File f) {
+        if (f.isDirectory()) for (File c : f.listFiles()) deleteRecursive(c);
+        f.delete();
+    }
+
+    private void takePerm(Uri uri) {
+        try { getContentResolver().takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
+    }
+
+    private void postImport(ModelConfig cfg) {
+        runOnUiThread(() -> {
+            pendingParamUri = null;
+            if (cfg == null) {
+                Toast.makeText(MainActivity.this, "导入失败", Toast.LENGTH_LONG).show();
+                return;
+            }
+            refreshModelList();
+            currentModelIndex = modelList.indexOf(cfg);
+            loadModelByIndex(currentModelIndex);
+            Toast.makeText(MainActivity.this, "导入成功: " + cfg.customName, Toast.LENGTH_LONG).show();
         });
     }
 
@@ -394,25 +496,22 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (resultCode != RESULT_OK || data == null) {
-            if (requestCode == PICK_PARAM_FILE_REQUEST || requestCode == PICK_BIN_FILE_REQUEST) {
-                pendingParamUri = null;
-            }
+            if (requestCode == PICK_MODEL_FILE_REQUEST) pendingParamUri = null;
             return;
         }
 
         Uri uri = data.getData();
         if (uri == null) return;
 
-        switch (requestCode) {
-            case PICK_IMAGE_REQUEST:
-                handleAlbumImage(uri);
-                break;
-            case PICK_PARAM_FILE_REQUEST:
-                onParamFileSelected(uri);
-                break;
-            case PICK_BIN_FILE_REQUEST:
-                onBinFileSelected(uri);
-                break;
+        if (requestCode == PICK_IMAGE_REQUEST) {
+            handleAlbumImage(uri);
+        } else if (requestCode == PICK_MODEL_FILE_REQUEST) {
+            if (pendingParamUri != null) {
+                // 已选过 .param，这次收到的当 .bin
+                onSecondFileSelected(uri);
+            } else {
+                onModelFileSelected(uri);
+            }
         }
     }
 
