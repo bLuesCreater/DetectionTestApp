@@ -134,7 +134,7 @@ public class StatsChartView extends View {
         float h = 12 * dp;                    // 上边距
         h += 22 * dp;                         // 标题
         h += 6 * dp;                          // 标题间距
-        h += 170 * dp;                        // 饼图+竖状图行
+        h += 120 * dp;                        // 饼图+竖状图行
         h += 12 * dp + 1 + 8 * dp;            // 分隔线
         h += 1 + 22 * dp * 6 + 5 * 1 + 1;     // 表格（边框+6行+5横线）
         h += 12 * dp;                         // 下边距
@@ -160,113 +160,98 @@ public class StatsChartView extends View {
         // ════════════════════════════════════════════
         // 饼图（左） + 竖状图（右）
         // ════════════════════════════════════════════
-        float rowH = 160 * dp;
+        float rowH = 120 * dp;
         float midX = w / 2f;
 
-        // ─── 饼图（左半区） ───
+        // ─── 饼图（左半区，紧凑） ───
         float pieL = pad;
         float pieT = y;
         float pieR = midX - 6 * dp;
-        float pieB = y + rowH;
 
-        float pieDiam = Math.min(pieR - pieL, pieB - pieT) - 8 * dp;
-        float pieCX   = pieL + (pieR - pieL) / 2f;
-        float pieCY   = pieT + 30 * dp + pieDiam / 2f;
-        float pieRadi = pieDiam / 2f - 4 * dp;
-
-        // 饼图标题
         c.drawText("类别分布", pieL + 4 * dp, pieT + 14 * dp, labelPaint);
+
+        // 饼图：缩小直径，放在左上区域
+        float pieDiam  = 72 * dp;
+        float pieRadi  = pieDiam / 2f;
+        float pieCX    = pieL + pieDiam / 2f + 4 * dp;
+        float pieCY    = pieT + 28 * dp + pieRadi;
 
         if (pieSlices != null && !pieSlices.isEmpty()) {
             int total = 0;
             for (PieSlice s : pieSlices) total += s.count;
-            if (total > 0 && pieRadi > 10 * dp) {
+            if (total > 0) {
                 // 背景圆
                 c.drawCircle(pieCX, pieCY, pieRadi, pieBgPaint);
-
-                // 画扇形
+                // 扇形
                 float sweepSum = 0;
                 for (PieSlice s : pieSlices) {
                     float sweep = 360f * s.count / total;
                     pieArcPaint.setColor(s.color);
-                    RectF oval = new RectF(pieCX - pieRadi, pieCY - pieRadi,
-                                           pieCX + pieRadi, pieCY + pieRadi);
-                    c.drawArc(oval, sweepSum - 90, sweep, true, pieArcPaint);
+                    c.drawArc(new RectF(pieCX - pieRadi, pieCY - pieRadi,
+                            pieCX + pieRadi, pieCY + pieRadi),
+                            sweepSum - 90, sweep, true, pieArcPaint);
                     sweepSum += sweep;
                 }
             }
 
-            // 图例（饼图下方集中排列）
-            float lx = pieL + 4 * dp;
-            float ly = pieCY + pieRadi + 10 * dp;
-            float legendItemH = 16 * dp;
-            Paint legendSwatch = new Paint();
-            legendSwatch.setStyle(Paint.Style.FILL);
-
+            // 图例放在饼图右侧、同一行
+            float legendX = pieCX + pieRadi + 8 * dp;
+            float legendY = pieCY - pieRadi + 4 * dp;
+            Paint swatch = new Paint();
+            swatch.setStyle(Paint.Style.FILL);
             for (PieSlice s : pieSlices) {
-                float swatchX = lx;
-                legendSwatch.setColor(s.color);
-                c.drawRect(swatchX, ly + 2 * dp, swatchX + 10 * dp, ly + 12 * dp, legendSwatch);
-                String txt = s.label + " " + s.count + " 个";
-                c.drawText(txt, swatchX + 14 * dp, ly + 12 * dp, legendPaint);
-                ly += legendItemH;
+                swatch.setColor(s.color);
+                c.drawRect(legendX, legendY + 2 * dp, legendX + 10 * dp, legendY + 12 * dp, swatch);
+                c.drawText(s.label + " " + s.count + " 个",
+                        legendX + 14 * dp, legendY + 12 * dp, legendPaint);
+                legendY += 18 * dp;
             }
         } else {
-            c.drawText("无数据", pieL + 4 * dp, pieT + 60 * dp, labelPaint);
+            c.drawText("无数据", pieL + 4 * dp, pieT + 50 * dp, labelPaint);
         }
 
         // ─── 竖状图（右半区） ───
         float vL = midX + 6 * dp;
         float vT = y;
         float vR = w - pad;
-        float vB = y + rowH;
 
         c.drawText("置信度分布", vL + 4 * dp, vT + 14 * dp, labelPaint);
 
         if (vertBars != null && !vertBars.isEmpty()) {
             int maxBars = Math.min(vertBars.size(), 12);
-            float barAreaL = vL + 8 * dp;
+            float barAreaL = vL + 6 * dp;
             float barAreaR = vR - 4 * dp;
-            float barAreaW = barAreaR - barAreaL;
             float barAreaT = vT + 24 * dp;
-            float barAreaB = vB - 20 * dp;
+            float barAreaB = vT + rowH - 16 * dp;
             float barAreaH = barAreaB - barAreaT;
 
-            float barW = Math.min(barAreaW / maxBars - 2 * dp, 24 * dp);
-            float gap  = (barAreaW - barW * maxBars) / (maxBars + 1);
+            float barW = Math.min((barAreaR - barAreaL) / maxBars - 2 * dp, 18 * dp);
+            float gap  = ((barAreaR - barAreaL) - barW * maxBars) / (maxBars + 1);
 
             float maxConf = 0;
-            for (VertBar b : vertBars) {
-                if (b.confidence > maxConf) maxConf = b.confidence;
-            }
+            for (VertBar b : vertBars) if (b.confidence > maxConf) maxConf = b.confidence;
             if (maxConf <= 0) maxConf = 1;
 
-            // 基线
             c.drawLine(barAreaL, barAreaB, barAreaR, barAreaB, axisPaint);
 
             for (int i = 0; i < maxBars; i++) {
                 VertBar vb = vertBars.get(i);
                 float barH = (vb.confidence / maxConf) * barAreaH;
-                float bx   = barAreaL + gap * (i + 1) + barW * i;
-                float by   = barAreaB - barH;
+                float bx = barAreaL + gap * (i + 1) + barW * i;
+                float by = barAreaB - barH;
 
-                // 背景条（浅灰）
                 c.drawRect(bx, barAreaT, bx + barW, barAreaB, barBgPaint);
-                // 前景条
                 vertBarPaint.setColor(vb.color);
                 c.drawRect(bx, by, bx + barW, barAreaB, vertBarPaint);
 
-                // 底部数字（序号）
-                String idxStr = String.valueOf(i + 1);
-                float tx = bx + (barW - axisPaint.measureText(idxStr)) / 2f;
-                c.drawText(idxStr, tx, barAreaB + 14 * dp, axisPaint);
+                String idx = String.valueOf(i + 1);
+                c.drawText(idx, bx + (barW - axisPaint.measureText(idx)) / 2f,
+                        barAreaB + 14 * dp, axisPaint);
             }
 
-            // 纵轴指示
             c.drawText("100%", barAreaR - 28 * dp, barAreaT + 10 * dp, axisPaint);
-            c.drawText("0",    barAreaR - 12 * dp, barAreaB - 4 * dp, axisPaint);
         } else {
-            c.drawText("无数据", vL + 4 * dp, vT + 60 * dp, labelPaint);
+            c.drawText("无数据", vL + 4 * dp, vT + 50 * dp, labelPaint);
         }
 
         y += rowH;
