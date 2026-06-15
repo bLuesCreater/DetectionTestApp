@@ -472,35 +472,35 @@ public class MainActivity extends AppCompatActivity {
         Bitmap annotated = drawResults(original, results);
         resultImage.setImageBitmap(annotated);
 
-        // 统计各类别
-        java.util.List<StatsChartView.BarData> barList = new java.util.ArrayList<>();
-        Map<String, int[]> classStats = new HashMap<>();
+        // ── 饼图数据（各类别数量） ──
+        java.util.List<StatsChartView.PieSlice> pieSlices = new java.util.ArrayList<>();
         Map<String, Integer> classIdMap = new HashMap<>();
-        int maxCount = 0;
+        Map<String, Integer> classCounts = new java.util.LinkedHashMap<>();
         for (DetectionResult r : results) {
-            int[] stats = classStats.get(r.className);
-            if (stats == null) {
-                stats = new int[]{0, 0};
-                classStats.put(r.className, stats);
+            int cnt = classCounts.containsKey(r.className) ? classCounts.get(r.className) + 1 : 1;
+            classCounts.put(r.className, cnt);
+            if (!classIdMap.containsKey(r.className)) {
                 classIdMap.put(r.className, r.classId);
             }
-            stats[0]++;
-            int confInt = (int)(r.confidence * 100);
-            if (confInt > stats[1]) stats[1] = confInt;
         }
-        for (int[] s : classStats.values()) {
-            if (s[0] > maxCount) maxCount = s[0];
+        for (Map.Entry<String, Integer> e : classCounts.entrySet()) {
+            StatsChartView.PieSlice s = new StatsChartView.PieSlice();
+            s.label = classNameDisplay(e.getKey());
+            s.count = e.getValue();
+            Integer cid = classIdMap.get(e.getKey());
+            s.color = NCNNPostProcessor.getClassColor(cid != null ? cid : 0);
+            pieSlices.add(s);
         }
 
-        for (Map.Entry<String, int[]> e : classStats.entrySet()) {
-            StatsChartView.BarData b = new StatsChartView.BarData();
-            b.label    = classNameDisplay(e.getKey());
-            b.count    = e.getValue()[0];
-            b.confPct  = e.getValue()[1];
-            Integer cid = classIdMap.get(e.getKey());
-            b.color    = NCNNPostProcessor.getClassColor(cid != null ? cid : 0);
-            b.maxCount = maxCount;
-            barList.add(b);
+        // ── 竖状图数据（各检测框置信度，按置信度排序） ──
+        // 按置信度降序排序
+        java.util.Collections.sort(results, (a, b) -> Float.compare(b.confidence, a.confidence));
+        java.util.List<StatsChartView.VertBar> vertBars = new java.util.ArrayList<>();
+        for (DetectionResult r : results) {
+            StatsChartView.VertBar v = new StatsChartView.VertBar();
+            v.confidence = r.confidence;
+            v.color = NCNNPostProcessor.getClassColor(r.classId);
+            vertBars.add(v);
         }
 
         ModelConfig cfg = detector.getModelConfig();
@@ -510,7 +510,7 @@ public class MainActivity extends AppCompatActivity {
         String iouStr  = (cfg != null) ? String.format("%.2f", cfg.iouThresh) : "?";
 
         statsChart.setData(
-                barList,
+                pieSlices, vertBars,
                 modelName,
                 inputSizeStr,
                 "conf " + confStr + " / iou " + iouStr,
