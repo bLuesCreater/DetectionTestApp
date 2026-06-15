@@ -85,9 +85,6 @@ public class MainActivity extends AppCompatActivity {
     private List<ModelConfig> modelList;
     private int currentModelIndex = -1;
 
-    // 导入流程暂存
-    private Uri pendingParamUri = null;
-
     // Threading
     private ExecutorService executor;
 
@@ -221,7 +218,7 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
 
     private void startImport() {
-        Toast.makeText(this, "选择模型文件 (.param 或 .zip/.ncnn)", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "选择 .ncnn 模型文件", Toast.LENGTH_LONG).show();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
@@ -246,50 +243,17 @@ public class MainActivity extends AppCompatActivity {
     private void onModelFileSelected(Uri uri) {
         String fileName = getFileName(uri).toLowerCase();
 
-        if (fileName.endsWith(".param")) {
-            // .param → 老流程，再选 .bin
-            pendingParamUri = uri;
-            Toast.makeText(this, "再选择 .bin 权重文件", Toast.LENGTH_LONG).show();
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            intent.addCategory(Intent.CATEGORY_OPENABLE);
-            intent.setType("*/*");
-            startActivityForResult(intent, PICK_MODEL_FILE_REQUEST);
-
-        } else if (fileName.endsWith(".zip") || fileName.endsWith(".ncnn")) {
-            // .zip / .ncnn → 解压后自动识别
+        if (fileName.endsWith(".zip") || fileName.endsWith(".ncnn")) {
             showNameDialogAndImportZip(uri);
-
         } else {
-            Toast.makeText(this, "请选择 .param, .zip 或 .ncnn 文件",
+            Toast.makeText(this, "请选择 .ncnn 或 .zip 文件",
                     Toast.LENGTH_LONG).show();
         }
-    }
-
-    /** 已选 .param，回调再次收到文件时当做 .bin */
-    private void onSecondFileSelected(Uri uri) {
-        if (pendingParamUri == null) return;
-        showNameDialogThenImport(pendingParamUri, uri);
     }
 
     // ════════════════════════════════════════════
     // 命名弹窗 + 导入
     // ════════════════════════════════════════════
-
-    private void showNameDialogThenImport(Uri paramUri, Uri binUri) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("命名模型");
-        final EditText input = new EditText(this);
-        input.setHint("输入模型名称");
-        input.setText("自定义模型 " + System.currentTimeMillis() % 10000);
-        builder.setView(input);
-        builder.setPositiveButton("导入", (dialog, which) -> {
-            String name = input.getText().toString().trim();
-            if (name.isEmpty()) { Toast.makeText(this, "名称不能为空", Toast.LENGTH_SHORT).show(); return; }
-            doImportFromUris(paramUri, binUri, name);
-        });
-        builder.setNegativeButton("取消", (dialog, which) -> pendingParamUri = null);
-        builder.show();
-    }
 
     private void showNameDialogAndImportZip(Uri zipUri) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
@@ -314,17 +278,6 @@ public class MainActivity extends AppCompatActivity {
     // 执行导入
     // ════════════════════════════════════════════
 
-    /** 从两个 URI 导入（.param + .bin） */
-    private void doImportFromUris(Uri paramUri, Uri binUri, String customName) {
-        Toast.makeText(this, "正在导入...", Toast.LENGTH_SHORT).show();
-        executor.execute(() -> {
-            takePerm(paramUri); takePerm(binUri);
-            ModelConfig cfg = modelManager.importModel(paramUri, binUri, customName);
-            postImport(cfg);
-        });
-    }
-
-    /** 从 zip/.ncnn 解压后导入 */
     private void doImportFromZip(Uri zipUri, String customName) {
         Toast.makeText(this, "正在解压导入...", Toast.LENGTH_SHORT).show();
         executor.execute(() -> {
@@ -392,7 +345,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void postImport(ModelConfig cfg) {
         runOnUiThread(() -> {
-            pendingParamUri = null;
             if (cfg == null) {
                 Toast.makeText(MainActivity.this, "导入失败", Toast.LENGTH_LONG).show();
                 return;
@@ -495,23 +447,14 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (resultCode != RESULT_OK || data == null) {
-            if (requestCode == PICK_MODEL_FILE_REQUEST) pendingParamUri = null;
-            return;
-        }
-
+        if (resultCode != RESULT_OK || data == null) return;
         Uri uri = data.getData();
         if (uri == null) return;
 
         if (requestCode == PICK_IMAGE_REQUEST) {
             handleAlbumImage(uri);
         } else if (requestCode == PICK_MODEL_FILE_REQUEST) {
-            if (pendingParamUri != null) {
-                // 已选过 .param，这次收到的当 .bin
-                onSecondFileSelected(uri);
-            } else {
-                onModelFileSelected(uri);
-            }
+            onModelFileSelected(uri);
         }
     }
 
