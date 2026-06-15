@@ -221,8 +221,8 @@ public class StatsChartView extends View {
             int maxBars = Math.min(vertBars.size(), 12);
             float barAreaL = vL + 6 * dp;
             float barAreaR = vR - 4 * dp;
-            float barAreaT = vT + 24 * dp;
-            float barAreaB = vT + rowH - 16 * dp;
+            float barAreaT = vT + 32 * dp;
+            float barAreaB = vT + rowH - 18 * dp;
             float barAreaH = barAreaB - barAreaT;
 
             float barW = Math.min((barAreaR - barAreaL) / maxBars - 2 * dp, 18 * dp);
@@ -255,7 +255,6 @@ public class StatsChartView extends View {
                         barAreaB + 14 * dp, axisPaint);
             }
 
-            c.drawText("100%", barAreaR - 28 * dp, barAreaT + 10 * dp, axisPaint);
         } else {
             c.drawText("无数据", vL + 4 * dp, vT + 50 * dp, labelPaint);
         }
