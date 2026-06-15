@@ -222,7 +222,7 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
 
     private void startImport() {
-        Toast.makeText(this, "请选择 .param 模型结构文件", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "步骤1/2: 选择 NCNN 结构文件 (.param)", Toast.LENGTH_LONG).show();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
@@ -231,7 +231,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onParamFileSelected(Uri uri) {
         pendingParamUri = uri;
-        Toast.makeText(this, "请选择 .bin 模型权重文件", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "步骤2/2: 选择 NCNN 权重文件 (.bin)", Toast.LENGTH_LONG).show();
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
